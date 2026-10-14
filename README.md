@@ -62,6 +62,15 @@ verification against the live API is the natural next step, on your machine.
 - `test/WebFunction.Verify/` — a small standalone console app that exercises the library against
   a local `HttpListener`-based mock server. **Not** a real unit-test project — see below.
 
+## Generics
+
+A generic object (an object definition using the type parameter `T`) is applied to a type as
+`{ "object.list": "object.user" }`. `WfnType.Parse` represents that as a `BaseType` of `object.list`
+with `Arg` set, printing as `object.list<object.user>`. The library doesn't resolve generics itself,
+and never fails on them: an unresolved `T` reads as `any` (`AnyType.Param` is true, for tooling that
+wants to tell it from a literal `any`), and a malformed application becomes `any` with the reason in
+`AnyType.Malformed` (`WfnType.MalformedKeyCount`, `MalformedKeyPrefix` or `MalformedArgument`).
+
 ## Why there's no xUnit/NUnit test project
 
 The sandbox this was built in can't reach `nuget.org` (the same class of restriction hit earlier

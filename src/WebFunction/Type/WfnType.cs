@@ -7,7 +7,8 @@ namespace WebFunction.Type;
 
 /// <summary>
 /// The recursive type-union grammar used by argument/attribute/return types in a Web Function
-/// package: a base type (optionally refined), an array of a type, a union of types, or "any".
+/// package: a base type (optionally refined), an array of a type, a union of types, a generic object
+/// applied to a type (<c>{ "object.list": "object.user" }</c>), or "any".
 /// Ported from the reference Ruby gem's <c>type.rb</c>, matching the model already used by
 /// webfunction-go and webfunction-java.
 /// </summary>
@@ -67,7 +68,19 @@ public abstract class WfnType
         _ => 0,
     };
 
-    /// <summary>Parses a raw <c>type</c>/<c>returns</c> JSON value (a string, or array of strings/arrays).</summary>
+    /// <summary><see cref="AnyType.Malformed"/> reason: a generic application object did not have exactly one key.</summary>
+    public const string MalformedKeyCount = "key-count";
+
+    /// <summary><see cref="AnyType.Malformed"/> reason: the application's key was not <c>object.&lt;name&gt;</c>.</summary>
+    public const string MalformedKeyPrefix = "key-prefix";
+
+    /// <summary><see cref="AnyType.Malformed"/> reason: the application's value was not a valid type.</summary>
+    public const string MalformedArgument = "argument";
+
+    /// <summary>
+    /// Parses a raw <c>type</c>/<c>returns</c> JSON value (a string, a generic application object, or an
+    /// array of strings/arrays/application objects).
+    /// </summary>
     public static WfnType Parse(JsonElement? raw)
     {
         if (raw is null || raw.Value.ValueKind == JsonValueKind.Null || raw.Value.ValueKind == JsonValueKind.Undefined)
@@ -89,6 +102,8 @@ public abstract class WfnType
         {
             case JsonValueKind.String:
                 return BaseFromString(raw.GetString()!);
+            case JsonValueKind.Object:
+                return Application(raw);
             case JsonValueKind.Array:
                 var inner = raw.EnumerateArray().Select(Detect).Where(t => t is not null).Select(t => t!).ToList();
                 return new ArrayOfType(inner.Count == 0 ? new AnyType() : Union(inner));
@@ -97,8 +112,44 @@ public abstract class WfnType
         }
     }
 
+    /// <summary>
+    /// Parses a generic application, <c>{ "object.&lt;name&gt;": &lt;type&gt; }</c>. Anything that is not
+    /// exactly that shape resolves to <see cref="AnyType"/> carrying the reason, rather than failing, so a
+    /// package using generics (even incorrectly) still loads.
+    /// </summary>
+    private static WfnType Application(JsonElement raw)
+    {
+        var properties = raw.EnumerateObject().ToList();
+
+        if (properties.Count != 1)
+        {
+            return new AnyType(malformed: MalformedKeyCount);
+        }
+
+        var key = properties[0].Name;
+
+        if (!key.StartsWith("object.", StringComparison.Ordinal) || key == "object.")
+        {
+            return new AnyType(malformed: MalformedKeyPrefix);
+        }
+
+        var value = properties[0].Value;
+
+        if (value.ValueKind is JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False)
+        {
+            return new AnyType(malformed: MalformedArgument);
+        }
+
+        return new BaseType("object", key["object.".Length..], Parse(value));
+    }
+
     private static WfnType BaseFromString(string type)
     {
+        if (type == "T")
+        {
+            return new AnyType(param: true);
+        }
+
         var parts = type.Split('.', 2);
         var baseType = parts[0];
         string? refinement = parts.Length > 1 ? parts[1] : null;
@@ -142,7 +193,7 @@ public abstract class WfnType
     /// </summary>
     public virtual bool Valid(object? value)
     {
-        if (this is not BaseType bt || bt.Refinement is null)
+        if (this is not BaseType { BaseTypeName: "string" or "number" } bt || bt.Refinement is null)
         {
             return true;
         }
@@ -159,7 +210,9 @@ internal sealed class WfnTypeEqualityComparer : IEqualityComparer<WfnType>
     {
         if (x is BaseType bx && y is BaseType by)
         {
-            return bx.BaseTypeName == by.BaseTypeName && bx.Refinement == by.Refinement;
+            return bx.BaseTypeName == by.BaseTypeName
+                && bx.Refinement == by.Refinement
+                && (bx.Arg is null ? by.Arg is null : by.Arg is not null && Equals(bx.Arg, by.Arg));
         }
 
         if (x is ArrayOfType ax && y is ArrayOfType ay)
@@ -172,7 +225,7 @@ internal sealed class WfnTypeEqualityComparer : IEqualityComparer<WfnType>
 
     public int GetHashCode(WfnType obj) => obj switch
     {
-        BaseType b => HashCode.Combine(b.BaseTypeName, b.Refinement),
+        BaseType b => HashCode.Combine(b.BaseTypeName, b.Refinement, b.Arg is null ? 0 : GetHashCode(b.Arg)),
         ArrayOfType a => HashCode.Combine("array", GetHashCode(a.Of)),
         _ => "any".GetHashCode(),
     };
