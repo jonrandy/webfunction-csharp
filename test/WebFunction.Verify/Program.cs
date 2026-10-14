@@ -304,6 +304,150 @@ await RunAsync("Private flag on Endpoint, Argument, and AttributeDef", () =>
     return Task.CompletedTask;
 });
 
+// --- Generics: applications of generic objects, and the type parameter T -----------------------
+
+static WebFunction.Type.WfnType ParseType(string json)
+{
+    using var doc = JsonDocument.Parse(json);
+    return WebFunction.Type.WfnType.Parse(doc.RootElement.Clone());
+}
+
+void CheckType(string json, string expected) =>
+    Check(ParseType(json).ToString() == expected, $"{json} should parse to '{expected}', got '{ParseType(json)}'");
+
+await RunAsync("generics: existing type forms are unchanged", () =>
+{
+    CheckType("\"string\"", "string");
+    CheckType("\"string.email\"", "string.email");
+    CheckType("\"object.user\"", "object.user");
+    CheckType("[\"string\",\"null\"]", "string | null");
+    CheckType("[[\"string\"]]", "array.of(string)");
+    CheckType("[[\"object.person\",\"null\"]]", "array.of(object.person | null)");
+    CheckType("[\"array\",[\"object.person\"]]", "array.of(any) | array.of(object.person)");
+    CheckType("null", "any");
+    return Task.CompletedTask;
+});
+
+await RunAsync("generics: a generic application parses with its argument", () =>
+{
+    var t = ParseType("""{ "object.list": "object.user" }""");
+    Check(t.ToString() == "object.list<object.user>", $"got {t}");
+    var bt = t as WebFunction.Type.BaseType;
+    Check(bt is not null && bt.BaseTypeName == "object" && bt.Refinement == "list", "object type named list");
+    Check(bt!.Arg?.ToString() == "object.user", "argument is object.user");
+    Check(t.Valid(new Dictionary<string, object?>()) && t.Valid("anything"), "an applied object type does no value validation");
+    return Task.CompletedTask;
+});
+
+await RunAsync("generics: union, nested and array arguments, and applications inside unions and arrays", () =>
+{
+    CheckType("""{ "object.list": ["object.user", "null"] }""", "object.list<object.user | null>");
+    CheckType("""{ "object.page": { "object.page": "object.user" } }""", "object.page<object.page<object.user>>");
+    CheckType("""{ "object.list": [["string"]] }""", "object.list<array.of(string)>");
+    CheckType("""[{ "object.list": "object.user" }, "null"]""", "object.list<object.user> | null");
+    CheckType("""[[{ "object.list": "object.user" }]]""", "array.of(object.list<object.user>)");
+    CheckType("""[[{ "object.list": "object.user" }, "null"]]""", "array.of(object.list<object.user> | null)");
+    CheckType("""{ "object.list": [{ "object.pair": "number" }, "null"] }""", "object.list<object.pair<number> | null>");
+    return Task.CompletedTask;
+});
+
+await RunAsync("generics: unions keep distinct applications and dedupe identical ones", () =>
+{
+    CheckType("""[{ "object.list": "string" }, { "object.list": "number" }]""", "object.list<string> | object.list<number>");
+    CheckType("""[{ "object.list": "string" }, { "object.list": "string" }]""", "object.list<string>");
+    return Task.CompletedTask;
+});
+
+await RunAsync("generics: a malformed application resolves to any, with the reason recorded", () =>
+{
+    (string json, string reason)[] cases =
+    [
+        ("{}", WebFunction.Type.WfnType.MalformedKeyCount),
+        ("""{ "object.a": "string", "object.b": "string" }""", WebFunction.Type.WfnType.MalformedKeyCount),
+        ("""{ "string": "object.user" }""", WebFunction.Type.WfnType.MalformedKeyPrefix),
+        ("""{ "list": "object.user" }""", WebFunction.Type.WfnType.MalformedKeyPrefix),
+        ("""{ "object.": "string" }""", WebFunction.Type.WfnType.MalformedKeyPrefix),
+        ("""{ "object.list": 5 }""", WebFunction.Type.WfnType.MalformedArgument),
+        ("""{ "object.list": true }""", WebFunction.Type.WfnType.MalformedArgument),
+    ];
+    foreach (var (json, reason) in cases)
+    {
+        var t = ParseType(json);
+        Check(t is WebFunction.Type.AnyType, $"{json} should be any, got {t}");
+        Check(((WebFunction.Type.AnyType)t).Malformed == reason, $"{json} reason should be {reason}, got {((WebFunction.Type.AnyType)t).Malformed}");
+        Check(t.Valid("anything"), $"{json} accepts anything");
+    }
+
+    // A malformed entry inside a union is kept as any, not dropped.
+    var u = ParseType("""[{ "string": "x" }, "null"]""");
+    Check(u.ToString() == "any | null", $"got {u}");
+    Check(((WebFunction.Type.UnionType)u).Types[0] is WebFunction.Type.AnyType { Malformed: WebFunction.Type.WfnType.MalformedKeyPrefix }, "reason kept inside a union");
+    Check(((WebFunction.Type.AnyType)ParseType("\"any\"")).Malformed is null, "a plain any is not malformed");
+    return Task.CompletedTask;
+});
+
+await RunAsync("generics: the unresolved type parameter T is any, marked for tooling", () =>
+{
+    CheckType("\"T\"", "any");
+    CheckType("[[\"T\"]]", "array.of(any)");
+    CheckType("[\"T\",\"null\"]", "any | null");
+    Check(ParseType("\"T\"").Valid("anything"), "T accepts anything");
+
+    Check(ParseType("\"T\"") is WebFunction.Type.AnyType { Param: true }, "T is marked as a parameter");
+    Check(((WebFunction.Type.ArrayOfType)ParseType("[[\"T\"]]")).Of is WebFunction.Type.AnyType { Param: true }, "mark survives inside an array");
+    Check(((WebFunction.Type.UnionType)ParseType("[\"T\",\"null\"]")).Types[0] is WebFunction.Type.AnyType { Param: true }, "mark survives inside a union");
+
+    // Only the bare token: a literal any and an object named T are not parameters.
+    Check(ParseType("\"any\"") is WebFunction.Type.AnyType { Param: false }, "a literal any is not a parameter");
+    Check(ParseType("\"object.T\"") is WebFunction.Type.BaseType { Refinement: "T" }, "object.T is an ordinary reference");
+    return Task.CompletedTask;
+});
+
+await RunAsync("generics: a package that uses generics loads", () =>
+{
+    const string json = """
+        {
+          "base_url": "https://api.example.com/",
+          "endpoints": [
+            {
+              "name": "list-users",
+              "returns": { "object.list": "object.user" },
+              "arguments": [{ "name": "filter", "type": [{ "object.pair": "string" }, "null"] }]
+            },
+            { "name": "broken", "returns": { "string": "x" }, "arguments": [] }
+          ],
+          "objects": [
+            { "name": "list", "attributes": [
+              { "name": "total", "type": "number" },
+              { "name": "items", "type": [["T"]] }
+            ] }
+          ]
+        }
+        """;
+    using var doc = JsonDocument.Parse(json);
+    var pkg = Package.FromJson(doc.RootElement);
+    var ep = pkg.GetEndpoint("list-users")!;
+    Check(ep.Returns.ToString() == "object.list<object.user>", $"returns: {ep.Returns}");
+    Check(ep.GetArgument("filter")!.ArgType.ToString() == "object.pair<string> | null", $"argument: {ep.GetArgument("filter")!.ArgType}");
+    Check(pkg.GetEndpoint("broken")!.Returns.ToString() == "any", "a malformed return is any");
+    var list = pkg.ObjectInContext("list", ObjectContext.Attributes)!;
+    Check(list.GetAttribute("items")!.AttrType.ToString() == "array.of(any)", $"T attribute: {list.GetAttribute("items")!.AttrType}");
+    return Task.CompletedTask;
+});
+
+await RunAsync("WfnType.Valid() only applies refinement validators to string and number, not to object names", () =>
+{
+    // An object that happens to share a name with a refinement (object.email, object.u32) is just an object reference.
+    Check(ParseType("\"object.email\"").Valid("not-an-email"), "object.email must not be email-validated");
+    Check(ParseType("\"object.u32\"").Valid("not-a-number"), "object.u32 must not be range-validated");
+    Check(ParseType("""{ "object.uuid": "string" }""").Valid("nope"), "an applied object.uuid must not be uuid-validated");
+
+    // ...while real refinements are still enforced.
+    Check(!ParseType("\"string.email\"").Valid("not-an-email"), "string.email still validates");
+    Check(!ParseType("\"number.u32\"").Valid(-1L), "number.u32 still validates");
+    return Task.CompletedTask;
+});
+
 server.Stop();
 
 Console.WriteLine($"\n{passed} passed, {failures.Count} failed.");
