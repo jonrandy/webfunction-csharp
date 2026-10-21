@@ -66,8 +66,10 @@ verification against the live API is the natural next step, on your machine.
 
 A generic object (an object definition using the type parameter `T`) is applied to a type as
 `{ "object.list": "object.user" }`. `WfnType.Parse` represents that as a `BaseType` of `object.list`
-with `Arg` set, printing as `object.list<object.user>`. The library doesn't resolve generics itself,
-and never fails on them: an unresolved `T` reads as `any` (`AnyType.Param` is true, for tooling that
+with `Arg` set, printing as `object.list<object.user>`. An array of a type can be written
+`{ "array": "object.user" }`, which is the same as `[["object.user"]]` (an `ArrayOfType`, printing as
+`array.of(object.user)`); a union of one entry is that entry. The library doesn't resolve generics
+itself, and never fails on them: an unresolved `T` reads as `any` (`AnyType.Param` is true, for tooling that
 wants to tell it from a literal `any`), and a malformed application becomes `any` with the reason in
 `AnyType.Malformed` (`WfnType.MalformedKeyCount`, `MalformedKeyPrefix` or `MalformedArgument`).
 

@@ -435,6 +435,106 @@ await RunAsync("generics: a package that uses generics loads", () =>
     return Task.CompletedTask;
 });
 
+await RunAsync("generics: an array application parses like the legacy nested-array form", () =>
+{
+    (string application, string legacy)[] pairs =
+    [
+        ("""{ "array": "string" }""", """[["string"]]"""),
+        ("""{ "array": "object.user" }""", """[["object.user"]]"""),
+        ("""{ "array": ["string", "null"] }""", """[["string", "null"]]"""),
+        ("""{ "array": "T" }""", """[["T"]]"""),
+        ("""{ "array": { "array": "string" } }""", """[[["string"]]]"""),
+        ("""{ "array": { "object.page": "object.user" } }""", """[[{ "object.page": "object.user" }]]"""),
+        ("""{ "object.page": { "array": "object.user" } }""", """{ "object.page": [["object.user"]] }"""),
+        ("""[{ "array": "string" }, "null"]""", """[["string"], "null"]"""),
+    ];
+    foreach (var (application, legacy) in pairs)
+    {
+        var a = ParseType(application);
+        var l = ParseType(legacy);
+        Check(a.ToString() == l.ToString(), $"{application} should read like {legacy} ('{l}'), got '{a}'");
+        Check(a.GetType() == l.GetType(), $"{application} should be a {l.GetType().Name}, got {a.GetType().Name}");
+    }
+    return Task.CompletedTask;
+});
+
+await RunAsync("generics: array applications format, and keep their element type", () =>
+{
+    CheckType("""{ "array": "string" }""", "array.of(string)");
+    CheckType("""{ "array": "object.user" }""", "array.of(object.user)");
+    CheckType("""{ "array": ["string", "number"] }""", "array.of(string | number)");
+    CheckType("""{ "array": { "array": "string" } }""", "array.of(array.of(string))");
+    CheckType("""{ "array": { "object.page": "object.user" } }""", "array.of(object.page<object.user>)");
+    CheckType("""{ "object.page": { "array": "object.user" } }""", "object.page<array.of(object.user)>");
+    CheckType("""{ "array": "T" }""", "array.of(any)");
+    CheckType("""[{ "array": "string" }, "null"]""", "array.of(string) | null");
+    CheckType("""["array", { "array": "string" }]""", "array.of(any) | array.of(string)");
+
+    var t = ParseType("""{ "array": "object.user" }""") as WebFunction.Type.ArrayOfType;
+    Check(t is not null && t.Of.ToString() == "object.user", "an array application is an ArrayOfType of its element");
+    Check(((WebFunction.Type.ArrayOfType)ParseType("""{ "array": "T" }""")).Of is WebFunction.Type.AnyType { Param: true }, "T survives as the element of an array application");
+    return Task.CompletedTask;
+});
+
+await RunAsync("generics: a malformed array application resolves to any, with the reason recorded", () =>
+{
+    (string json, string reason)[] cases =
+    [
+        ("""{ "array": "string", "object.a": "string" }""", WebFunction.Type.WfnType.MalformedKeyCount),
+        ("""{ "array": 5 }""", WebFunction.Type.WfnType.MalformedArgument),
+        ("""{ "array": true }""", WebFunction.Type.WfnType.MalformedArgument),
+        ("""{ "arrays": "string" }""", WebFunction.Type.WfnType.MalformedKeyPrefix),
+        ("""{ "array.x": "string" }""", WebFunction.Type.WfnType.MalformedKeyPrefix),
+        ("""{ "Array": "string" }""", WebFunction.Type.WfnType.MalformedKeyPrefix),
+    ];
+    foreach (var (json, reason) in cases)
+    {
+        var t = ParseType(json);
+        Check(t is WebFunction.Type.AnyType, $"{json} should be any, got {t}");
+        Check(((WebFunction.Type.AnyType)t).Malformed == reason, $"{json} reason should be {reason}, got {((WebFunction.Type.AnyType)t).Malformed}");
+    }
+    return Task.CompletedTask;
+});
+
+// Spec: a union of one entry is that entry. The parser already collapses it; this pins it.
+await RunAsync("generics: a union of one entry is that entry", () =>
+{
+    Check(ParseType("""["string"]""") is WebFunction.Type.BaseType { BaseTypeName: "string" }, "[\"string\"] is string");
+    CheckType("""["string.email"]""", "string.email");
+    Check(ParseType("""["T"]""") is WebFunction.Type.AnyType { Param: true }, "[\"T\"] is T");
+    Check(ParseType("""[{ "array": "string" }]""") is WebFunction.Type.ArrayOfType, "a one-entry union holding an array application is that array");
+    Check(ParseType("""[{ "object.list": "object.user" }]""") is WebFunction.Type.BaseType { Refinement: "list" }, "a one-entry union holding an application is that application");
+    // The legacy array shorthand is not a one-entry union: [["x"]] is still an array of x.
+    Check(ParseType("""[["string"]]""") is WebFunction.Type.ArrayOfType, "[[\"string\"]] is an array");
+    Check(ParseType("""["string", "null"]""") is WebFunction.Type.UnionType, "two entries stay a union");
+    return Task.CompletedTask;
+});
+
+await RunAsync("generics: a package that uses array applications loads", () =>
+{
+    const string json = """
+        {
+          "base_url": "https://api.example.com/",
+          "endpoints": [
+            { "name": "get-comments", "returns": { "array": "object.comment" }, "arguments": [] }
+          ],
+          "objects": [
+            { "name": "comment", "attributes": [
+              { "name": "id", "type": "string.uuid" },
+              { "name": "message", "type": "string" },
+              { "name": "replies", "type": { "array": "object.comment" } }
+            ] }
+          ]
+        }
+        """;
+    using var doc = JsonDocument.Parse(json);
+    var pkg = Package.FromJson(doc.RootElement);
+    Check(pkg.GetEndpoint("get-comments")!.Returns.ToString() == "array.of(object.comment)", $"returns: {pkg.GetEndpoint("get-comments")!.Returns}");
+    var comment = pkg.ObjectInContext("comment", ObjectContext.Attributes)!;
+    Check(comment.GetAttribute("replies")!.AttrType.ToString() == "array.of(object.comment)", $"replies: {comment.GetAttribute("replies")!.AttrType}");
+    return Task.CompletedTask;
+});
+
 await RunAsync("WfnType.Valid() only applies refinement validators to string and number, not to object names", () =>
 {
     // An object that happens to share a name with a refinement (object.email, object.u32) is just an object reference.
