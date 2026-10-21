@@ -7,8 +7,9 @@ namespace WebFunction.Type;
 
 /// <summary>
 /// The recursive type-union grammar used by argument/attribute/return types in a Web Function
-/// package: a base type (optionally refined), an array of a type, a union of types, a generic object
-/// applied to a type (<c>{ "object.list": "object.user" }</c>), or "any".
+/// package: a base type (optionally refined), an array of a type (<c>[["t"]]</c> or <c>{ "array": "t" }</c>),
+/// a union of types (a union of one entry is that entry), a generic object applied to a type
+/// (<c>{ "object.list": "object.user" }</c>), or "any".
 /// Ported from the reference Ruby gem's <c>type.rb</c>, matching the model already used by
 /// webfunction-go and webfunction-java.
 /// </summary>
@@ -71,14 +72,14 @@ public abstract class WfnType
     /// <summary><see cref="AnyType.Malformed"/> reason: a generic application object did not have exactly one key.</summary>
     public const string MalformedKeyCount = "key-count";
 
-    /// <summary><see cref="AnyType.Malformed"/> reason: the application's key was not <c>object.&lt;name&gt;</c>.</summary>
+    /// <summary><see cref="AnyType.Malformed"/> reason: the application's key was neither <c>object.&lt;name&gt;</c> nor <c>array</c>.</summary>
     public const string MalformedKeyPrefix = "key-prefix";
 
     /// <summary><see cref="AnyType.Malformed"/> reason: the application's value was not a valid type.</summary>
     public const string MalformedArgument = "argument";
 
     /// <summary>
-    /// Parses a raw <c>type</c>/<c>returns</c> JSON value (a string, a generic application object, or an
+    /// Parses a raw <c>type</c>/<c>returns</c> JSON value (a string, an application object, or an
     /// array of strings/arrays/application objects).
     /// </summary>
     public static WfnType Parse(JsonElement? raw)
@@ -113,9 +114,10 @@ public abstract class WfnType
     }
 
     /// <summary>
-    /// Parses a generic application, <c>{ "object.&lt;name&gt;": &lt;type&gt; }</c>. Anything that is not
-    /// exactly that shape resolves to <see cref="AnyType"/> carrying the reason, rather than failing, so a
-    /// package using generics (even incorrectly) still loads.
+    /// Parses a type application: a generic object applied to a type, <c>{ "object.&lt;name&gt;": &lt;type&gt; }</c>,
+    /// or an array of a type, <c>{ "array": &lt;type&gt; }</c> (the same as <c>[[&lt;type&gt;]]</c>). Anything that is
+    /// not exactly one of those shapes resolves to <see cref="AnyType"/> carrying the reason, rather than
+    /// failing, so a package using generics (even incorrectly) still loads.
     /// </summary>
     private static WfnType Application(JsonElement raw)
     {
@@ -127,6 +129,15 @@ public abstract class WfnType
         }
 
         var key = properties[0].Name;
+
+        if (key == "array")
+        {
+            var element = properties[0].Value;
+
+            return element.ValueKind is JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False
+                ? new AnyType(malformed: MalformedArgument)
+                : new ArrayOfType(Parse(element));
+        }
 
         if (!key.StartsWith("object.", StringComparison.Ordinal) || key == "object.")
         {
