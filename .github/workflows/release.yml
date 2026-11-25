@@ -19,9 +19,9 @@ jobs:
       contents: read
       id-token: write # required for the OIDC token exchange with nuget.org
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 8.0.x
 
