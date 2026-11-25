@@ -3,7 +3,7 @@
 A C# client library for the [Web Function](https://webfunction.org) protocol, in the same
 reference-client family as `webfunction-go` and `webfunction-java`.
 
-- **Target**: .NET 8 (current LTS). Zero external dependencies — uses only `System.Text.Json`
+- **Target**: .NET 8 (runs on .NET 8 and later). Zero external dependencies — uses only `System.Text.Json`
   and `System.Net.Http`, both part of the runtime.
 - **Dynamic dispatch**: `Client` derives from `System.Dynamic.DynamicObject`, so a `dynamic`
   client exposes endpoints as methods directly — `client.ListItems(args)` dispatches to the

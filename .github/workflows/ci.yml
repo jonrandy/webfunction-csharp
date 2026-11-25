@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Build
+        run: dotnet build WebFunction.sln -c Release
+
+      - name: Verify
+        run: dotnet run --project test/WebFunction.Verify -c Release --no-build
+
+      - name: Pack (dry run)
+        run: dotnet pack src/WebFunction/WebFunction.csproj -c Release --no-build -o artifacts

@@ -1,0 +1,56 @@
+name: Release
+
+# Publishes to NuGet when a version tag (e.g. v0.3.0) is pushed.
+# Uses NuGet Trusted Publishing (OIDC) - no long-lived API key is stored.
+# Requires: a Trusted Publishing policy on nuget.org for this repo + workflow file,
+# and a NUGET_USER repository secret holding the nuget.org profile name.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required for the OIDC token exchange with nuget.org
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Check tag matches package version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CSPROJ_VERSION=$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' src/WebFunction/WebFunction.csproj)
+          CODE_VERSION=$(sed -n 's|.*Current = "\(.*\)";.*|\1|p' src/WebFunction/Version.cs)
+          echo "tag=$TAG_VERSION csproj=$CSPROJ_VERSION Version.cs=$CODE_VERSION"
+          if [ "$TAG_VERSION" != "$CSPROJ_VERSION" ] || [ "$TAG_VERSION" != "$CODE_VERSION" ]; then
+            echo "::error::Tag, WebFunction.csproj <Version> and Version.cs must all match."
+            exit 1
+          fi
+
+      - name: Build
+        run: dotnet build WebFunction.sln -c Release
+
+      - name: Verify
+        run: dotnet run --project test/WebFunction.Verify -c Release --no-build
+
+      - name: Pack
+        run: dotnet pack src/WebFunction/WebFunction.csproj -c Release --no-build -o artifacts
+
+      - name: NuGet login (OIDC)
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
+      - name: Push to nuget.org
+        # Pushing the .nupkg also pushes the matching .snupkg symbols package.
+        run: dotnet nuget push "artifacts/*.nupkg" --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json

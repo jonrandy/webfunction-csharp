@@ -6,4 +6,35 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <!-- NuGet package metadata. Keep <Version> in sync with Version.cs (the release workflow checks this). -->
+  <PropertyGroup>
+    <PackageId>WebFunction</PackageId>
+    <Version>0.3.0</Version>
+    <Authors>Akkaranet Co., Ltd.</Authors>
+    <Copyright>Copyright (c) 2026 Akkaranet Co., Ltd.</Copyright>
+    <Description>A C# client library for the Web Function protocol (https://webfunction.org). Zero external dependencies, async-first, with dynamic endpoint dispatch.</Description>
+    <PackageTags>webfunction;web-function;api;client;http;json</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://webfunction.org</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/webfunction-protocol/webfunction-csharp</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <!-- Symbols + SourceLink (built into the .NET 8 SDK, so no extra package reference). -->
+  <PropertyGroup>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(GITHUB_ACTIONS)' == 'true'">
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
 </Project>
